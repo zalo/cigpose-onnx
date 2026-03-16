@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2025 Namas Bhandari <namas.brd@gmail.com>
 # ONNX runtime wrapper for CIGPose pose estimation models.
-# Original CIGPose by 53mins — https://github.com/53mins/CIGPose
+# Original CIGPose by 53mins - https://github.com/53mins/CIGPose
 # Licensed under Apache 2.0
 
 """
@@ -220,7 +220,7 @@ def preprocess_person(frame, bbox, input_w, input_h):
 def decode_simcc(simcc_x, simcc_y, input_w, input_h, split_ratio):
     """Decode SimCC logits to (K, 2) coords + (K,) confidence scores.
 
-    Confidence is min(max_logit_x, max_logit_y) per keypoint — matches
+    Confidence is min(max_logit_x, max_logit_y) per keypoint, matching
     the MMPose get_simcc_maximum convention.
     """
     x_locs = np.argmax(simcc_x[0], axis=-1).astype(np.float32)
