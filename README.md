@@ -82,7 +82,7 @@ python run_onnx.py --model models/cigpose-m_coco-wholebody_256x192.onnx \
 python run_onnx.py --model models/cigpose-x_coco-ubody_384x288.onnx \
                    --detector models/yolox_nano.onnx --video clip.mp4
 
-# webcam (q = quit, m = toggle keypoint mode)
+# webcam (q = quit)
 python run_onnx.py --model models/cigpose-m_coco-wholebody_256x192.onnx \
                    --detector models/yolox_nano.onnx --webcam
 ```
@@ -98,7 +98,6 @@ Omitting `--detector` treats the full frame as one person (useful for pre-croppe
 | `--image / --video / --webcam` | - | Input source |
 | `--output, -o` | auto | Output path |
 | `--threshold` | 0.6 | Min keypoint confidence to draw |
-| `--vis-mode` | yolo29 | `yolo29` (29 kpts) or `all` (full set) |
 | `--det-threshold` | 0.5 | Person detection confidence |
 | `--det-nms` | 0.45 | Detection NMS IoU |
 | `--device` | cpu | `cpu` or `cuda` |

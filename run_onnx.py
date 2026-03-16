@@ -28,20 +28,6 @@ import onnxruntime as ort
 # Keypoint definitions & skeleton connectivity
 # ---------------------------------------------------------------------------
 
-# 29-keypoint subset used by YOLO-Pose, mapped from COCO-WholeBody 133
-WHOLEBODY_TO_YOLO29 = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,  # body
-    96, 100, 108, 117, 121, 129,                                   # hand tips
-    17, 18, 19, 20, 21, 22,                                        # feet
-]
-
-YOLO29_SKELETON = [
-    (0, 1), (0, 2), (1, 3), (2, 4), (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
-    (5, 11), (6, 12), (11, 12), (11, 13), (13, 15), (12, 14), (14, 16),
-    (9, 17), (9, 18), (9, 19), (10, 20), (10, 21), (10, 22),
-    (15, 23), (15, 24), (15, 25), (16, 26), (16, 27), (16, 28),
-]
-
 COCO17_SKELETON = [
     (0, 1), (0, 2), (1, 3), (2, 4), (0, 5), (0, 6),
     (5, 7), (7, 9), (6, 8), (8, 10),
@@ -90,11 +76,11 @@ COCO133_SKELETON = [
 _MEAN = np.array([123.675, 116.28, 103.53], dtype=np.float32)
 _STD = np.array([58.395, 57.12, 57.375], dtype=np.float32)
 
-# Maps keypoint count -> skeleton lookup
+# Maps keypoint count -> skeleton
 _SKELETON_MAP = {
-    133: {'yolo29': (WHOLEBODY_TO_YOLO29, YOLO29_SKELETON), 'all': (None, COCO133_SKELETON)},
-    17:  {'all': (None, COCO17_SKELETON)},
-    14:  {'all': (None, CROWDPOSE14_SKELETON)},
+    133: COCO133_SKELETON,
+    17:  COCO17_SKELETON,
+    14:  CROWDPOSE14_SKELETON,
 }
 
 
@@ -248,18 +234,10 @@ def remap_to_frame(kpts, crop_region, input_w, input_h):
 # Visualization
 # ---------------------------------------------------------------------------
 
-def draw_pose(frame, keypoints, scores, threshold=0.6, mode='yolo29'):
-    """Overlay skeleton and keypoints. Picks the right skeleton based on K."""
-    n_kpts = len(keypoints)
-
-    spec = _SKELETON_MAP.get(n_kpts, {})
-    idx_map, skeleton = spec.get(mode, spec.get('all', (None, [])))
-
-    if idx_map is not None:
-        kpts = keypoints[idx_map]
-        kscores = scores[idx_map]
-    else:
-        kpts, kscores = keypoints, scores
+def draw_pose(frame, keypoints, scores, threshold=0.6):
+    """Overlay skeleton and keypoints. Picks the right skeleton based on keypoint count."""
+    skeleton = _SKELETON_MAP.get(len(keypoints), [])
+    kpts, kscores = keypoints, scores
 
     K = len(kpts)
     for i, j in skeleton:
@@ -294,7 +272,7 @@ def _draw_bboxes(frame, bboxes):
 # ---------------------------------------------------------------------------
 
 def _infer_persons(session, frame, bboxes, input_w, input_h, split_ratio,
-                   threshold, vis_mode):
+                   threshold):
     """Run pose estimation on each detected person and draw results."""
     vis = frame.copy()
     for bbox in bboxes:
@@ -302,12 +280,12 @@ def _infer_persons(session, frame, bboxes, input_w, input_h, split_ratio,
         simcc_x, simcc_y = session.run(None, {'input': tensor})
         kpts, scores = decode_simcc(simcc_x, simcc_y, input_w, input_h, split_ratio)
         kpts = remap_to_frame(kpts, crop_region, input_w, input_h)
-        draw_pose(vis, kpts, scores, threshold, vis_mode)
+        draw_pose(vis, kpts, scores, threshold)
     return vis
 
 
 def run_on_image(session, image_path, input_w, input_h, split_ratio,
-                 output_path, threshold, vis_mode, detector=None):
+                 output_path, threshold, detector=None):
     frame = cv2.imread(image_path)
     if frame is None:
         print(f"Cannot read {image_path}")
@@ -317,7 +295,7 @@ def run_on_image(session, image_path, input_w, input_h, split_ratio,
     print(f"Detected {len(bboxes)} person(s)")
 
     vis = _infer_persons(session, frame, bboxes, input_w, input_h,
-                         split_ratio, threshold, vis_mode)
+                         split_ratio, threshold)
     if detector:
         _draw_bboxes(vis, bboxes)
 
@@ -331,7 +309,7 @@ def run_on_image(session, image_path, input_w, input_h, split_ratio,
 
 
 def run_on_video(session, video_path, input_w, input_h, split_ratio,
-                 output_path, threshold, vis_mode, detector=None):
+                 output_path, threshold, detector=None):
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"Cannot open {video_path}")
@@ -355,7 +333,7 @@ def run_on_video(session, video_path, input_w, input_h, split_ratio,
         t0 = time.time()
         bboxes = detector.detect(frame) if detector else [[0, 0, w, h]]
         vis = _infer_persons(session, frame, bboxes, input_w, input_h,
-                             split_ratio, threshold, vis_mode)
+                             split_ratio, threshold)
         if detector:
             _draw_bboxes(vis, bboxes)
         dt = time.time() - t0
@@ -382,15 +360,14 @@ def run_on_video(session, video_path, input_w, input_h, split_ratio,
     cv2.destroyAllWindows()
 
 
-def run_on_webcam(session, input_w, input_h, split_ratio, threshold, vis_mode,
+def run_on_webcam(session, input_w, input_h, split_ratio, threshold,
                   detector=None, cam_id=0):
     cap = cv2.VideoCapture(cam_id)
     if not cap.isOpened():
         print(f"Cannot open webcam {cam_id}")
         return
 
-    print("Controls: 'q' quit, 'm' toggle vis mode")
-    cur_mode = vis_mode
+    print("Press 'q' to quit")
 
     while True:
         ret, frame = cap.read()
@@ -400,20 +377,17 @@ def run_on_webcam(session, input_w, input_h, split_ratio, threshold, vis_mode,
         t0 = time.time()
         bboxes = detector.detect(frame) if detector else [[0, 0, frame.shape[1], frame.shape[0]]]
         vis = _infer_persons(session, frame, bboxes, input_w, input_h,
-                             split_ratio, threshold, cur_mode)
+                             split_ratio, threshold)
         if detector:
             _draw_bboxes(vis, bboxes)
         dt = time.time() - t0
 
-        info = f'{1 / max(dt, 1e-6):.1f} FPS | {len(bboxes)} person(s) | {cur_mode}'
+        info = f'{1 / max(dt, 1e-6):.1f} FPS | {len(bboxes)} person(s)'
         cv2.putText(vis, info, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
         cv2.imshow('CIGPose', vis)
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-        elif key == ord('m'):
-            cur_mode = 'all' if cur_mode == 'yolo29' else 'yolo29'
 
     cap.release()
     cv2.destroyAllWindows()
@@ -433,8 +407,6 @@ def main():
     p.add_argument('--cam-id', type=int, default=0)
     p.add_argument('--output', '-o', default=None, help='Output path')
     p.add_argument('--threshold', type=float, default=0.6, help='Keypoint confidence threshold')
-    p.add_argument('--vis-mode', choices=['yolo29', 'all'], default='yolo29',
-                   help='yolo29: 29 kpts, all: full keypoint set')
     p.add_argument('--det-threshold', type=float, default=0.5)
     p.add_argument('--det-nms', type=float, default=0.45)
     p.add_argument('--device', choices=['cpu', 'cuda'], default='cpu')
@@ -469,14 +441,14 @@ def main():
     if args.image:
         out = args.output or args.image.rsplit('.', 1)[0] + '_pose.' + args.image.rsplit('.', 1)[-1]
         run_on_image(sess, args.image, input_w, input_h, split_ratio,
-                     out, args.threshold, args.vis_mode, detector)
+                     out, args.threshold, detector)
     elif args.video:
         out = args.output or args.video.rsplit('.', 1)[0] + '_pose.mp4'
         run_on_video(sess, args.video, input_w, input_h, split_ratio,
-                     out, args.threshold, args.vis_mode, detector)
+                     out, args.threshold, detector)
     elif args.webcam:
         run_on_webcam(sess, input_w, input_h, split_ratio,
-                      args.threshold, args.vis_mode, detector, args.cam_id)
+                      args.threshold, detector, args.cam_id)
 
 
 if __name__ == '__main__':
