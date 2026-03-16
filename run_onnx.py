@@ -1,5 +1,4 @@
-#!/usr/bin/env python3
-# Copyright (c) 2025 Namas Bhandari <namas.brd@gmail.com>
+# Author: Namas Bhandari <namas.brd@gmail.com>
 # ONNX runtime wrapper for CIGPose pose estimation models.
 # Original CIGPose by 53mins - https://github.com/53mins/CIGPose
 # Licensed under Apache 2.0
