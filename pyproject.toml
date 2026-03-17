@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cigpose-onnx"
+version = "1.0.1"
+description = "Whole-body pose estimation with CIGPose and ONNX Runtime"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.8"
+authors = [
+    {name = "Namas Bhandari", email = "namas.brd@gmail.com"},
+]
+keywords = ["pose-estimation", "onnx", "cigpose", "whole-body", "keypoints", "computer-vision"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+dependencies = [
+    "onnxruntime>=1.16.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+]
+
+[project.optional-dependencies]
+gpu = ["onnxruntime-gpu>=1.16.0"]
+
+[project.urls]
+Homepage = "https://github.com/namas191297/cigpose-onnx"
+Repository = "https://github.com/namas191297/cigpose-onnx"
+Issues = "https://github.com/namas191297/cigpose-onnx/issues"
+
+[project.scripts]
+cigpose = "cigpose.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cigpose*"]
