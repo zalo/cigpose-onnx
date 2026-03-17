@@ -1,13 +1,13 @@
 <div align="center">
 <h1>CIGPose ONNX Runtime</h1>
-<p>Whole-body pose estimation with ONNX Runtime. Single script, no PyTorch or MMPose required.</p>
+<p>Whole-body pose estimation with ONNX Runtime. Single pip install, no PyTorch or MMPose required.</p>
 <br>
 <img src="demo.gif" width="640" />
 </div>
 
 ---
 
-Pre-exported ONNX models and a single-file inference script for [CIGPose](https://github.com/53mins/CIGPose) (**67.5 Whole AP** on COCO-WholeBody).
+Pre-exported ONNX models and a lightweight inference CLI for [CIGPose](https://github.com/53mins/CIGPose) (**67.5 Whole AP** on COCO-WholeBody).
 
 > CIGPose by [53mins](https://github.com/53mins/CIGPose). Model weights come from the original training pipeline built on [MMPose](https://github.com/open-mmlab/mmpose). This repo is just the ONNX conversion and inference wrapper.
 
@@ -43,65 +43,178 @@ Left to right: input, RTMPose-x, CIGPose-x.
 
 ---
 
-## Quick Start
+## Installation
 
 ```bash
-pip install onnxruntime opencv-python numpy
-# or: pip install onnxruntime-gpu opencv-python numpy
+pip install cigpose-onnx
 ```
 
-Download the model pack from the [Releases](../../releases) page:
+For GPU inference:
 
 ```bash
-# grab the latest release zip
-wget https://github.com/namas191297/cigpose-onnx/releases/latest/download/cigpose_models.zip
+pip install cigpose-onnx[gpu]
+```
 
-# extract into the models/ directory
+Or install from source:
+
+```bash
+git clone https://github.com/namas191297/cigpose-onnx.git
+cd cigpose-onnx
+pip install .
+```
+
+This gives you both the `cigpose` CLI command and the ability to run `python run_onnx.py` directly.
+
+## Quick Start
+
+Download models from the [Releases](../../releases) page:
+
+```bash
+wget https://github.com/namas191297/cigpose-onnx/releases/latest/download/cigpose_models.zip
 unzip cigpose_models.zip -d models/
 ```
 
-You should end up with:
-
-```
-cigpose-onnx/
-  models/
-    yolox_nano.onnx
-    cigpose-m_coco-wholebody_256x192.onnx
-    ...
-  run_onnx.py
-```
-
-Run it:
+Run inference:
 
 ```bash
 # image
-python run_onnx.py --model models/cigpose-m_coco-wholebody_256x192.onnx \
-                   --detector models/yolox_nano.onnx --image photo.jpg
+cigpose --model models/cigpose-m_coco-wholebody_256x192.onnx \
+        --detector models/yolox_nano.onnx --image photo.jpg
 
 # video
-python run_onnx.py --model models/cigpose-x_coco-ubody_384x288.onnx \
-                   --detector models/yolox_nano.onnx --video clip.mp4
+cigpose --model models/cigpose-x_coco-ubody_384x288.onnx \
+        --detector models/yolox_nano.onnx --video clip.mp4 -o result.mp4
 
 # webcam (q = quit)
-python run_onnx.py --model models/cigpose-m_coco-wholebody_256x192.onnx \
-                   --detector models/yolox_nano.onnx --webcam
+cigpose --model models/cigpose-m_coco-wholebody_256x192.onnx \
+        --detector models/yolox_nano.onnx --webcam
+
+# webcam + record to file
+cigpose --model models/cigpose-m_coco-wholebody_256x192.onnx \
+        --detector models/yolox_nano.onnx --webcam -o recording.mp4
+
+# headless server (no display window)
+cigpose --model models/cigpose-x_coco-ubody_384x288.onnx \
+        --detector models/yolox_nano.onnx --video clip.mp4 -o out.mp4 --no-display
 ```
 
 Omitting `--detector` treats the full frame as one person (useful for pre-cropped inputs).
 
+If you installed from source with `pip install .`, you can also use `python run_onnx.py` with the same arguments instead of the `cigpose` command.
+
 ### CLI Options
+
+```
+cigpose --help
+```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model` | *required* | CIGPose ONNX model |
-| `--detector` | none | YOLOX ONNX detector |
-| `--image / --video / --webcam` | - | Input source |
-| `--output, -o` | auto | Output path |
+| `--model` | *required* | CIGPose ONNX model path |
+| `--detector` | none | YOLOX ONNX detector path |
+| `--image` | - | Input image path |
+| `--video` | - | Input video path |
+| `--webcam` | - | Use webcam as input |
+| `--cam-id` | 0 | Webcam device index |
+| `--output, -o` | auto | Output path (auto-generated if omitted) |
+| `--no-display` | off | Skip display windows (headless mode, requires `--output`) |
 | `--threshold` | 0.6 | Min keypoint confidence to draw |
 | `--det-threshold` | 0.5 | Person detection confidence |
 | `--det-nms` | 0.45 | Detection NMS IoU |
 | `--device` | cpu | `cpu` or `cuda` |
-| `--cam-id` | 0 | Webcam index |
+| `--version` | - | Print version and exit |
+
+### Python API
+
+The package exposes three levels of API depending on how much control you need.
+
+**High-level** - detect + pose estimate + draw in one call:
+
+```python
+from cigpose import load_pose_model, YOLOXDetector, infer_persons, draw_bboxes
+import cv2
+
+sess, input_w, input_h, split_ratio = load_pose_model('models/cigpose-x_coco-ubody_384x288.onnx')
+detector = YOLOXDetector('models/yolox_nano.onnx')
+
+frame = cv2.imread('photo.jpg')
+bboxes = detector.detect(frame)
+vis = infer_persons(sess, frame, bboxes, input_w, input_h, split_ratio, threshold=0.6)
+draw_bboxes(vis, bboxes)
+cv2.imwrite('result.jpg', vis)
+```
+
+**Mid-level** - use the run functions directly (handles I/O for you):
+
+```python
+from cigpose import load_pose_model, YOLOXDetector, run_on_image, run_on_video
+
+sess, input_w, input_h, split_ratio = load_pose_model('models/cigpose-x_coco-ubody_384x288.onnx')
+detector = YOLOXDetector('models/yolox_nano.onnx')
+
+# image
+run_on_image(sess, 'photo.jpg', input_w, input_h, split_ratio,
+             'result.jpg', threshold=0.6, detector=detector, show=False)
+
+# video
+run_on_video(sess, 'clip.mp4', input_w, input_h, split_ratio,
+             'result.mp4', threshold=0.6, detector=detector, show=False)
+```
+
+**Low-level** - full control over each step:
+
+```python
+from cigpose import (
+    load_pose_model, YOLOXDetector,
+    preprocess_person, decode_simcc, remap_to_frame, draw_pose,
+)
+import cv2
+
+sess, input_w, input_h, split_ratio = load_pose_model('models/cigpose-x_coco-ubody_384x288.onnx')
+detector = YOLOXDetector('models/yolox_nano.onnx')
+
+frame = cv2.imread('photo.jpg')
+bboxes = detector.detect(frame)
+
+for bbox in bboxes:
+    # crop, resize, normalize
+    tensor, crop_region = preprocess_person(frame, bbox, input_w, input_h)
+
+    # run pose model
+    simcc_x, simcc_y = sess.run(None, {'input': tensor})
+
+    # decode SimCC outputs to keypoints + confidence scores
+    # kpts: (K, 2) pixel coords in model-input space
+    # scores: (K,) raw logit confidence per keypoint
+    kpts, scores = decode_simcc(simcc_x, simcc_y, input_w, input_h, split_ratio)
+
+    # map back to original frame coordinates
+    kpts = remap_to_frame(kpts, crop_region, input_w, input_h)
+
+    # draw (or do whatever you want with kpts/scores)
+    draw_pose(frame, kpts, scores, threshold=0.6)
+
+cv2.imwrite('result.jpg', frame)
+```
+
+**Available exports:**
+
+| Function | Description |
+|----------|-------------|
+| `load_pose_model(path, providers)` | Load ONNX model, returns `(session, input_w, input_h, split_ratio)` |
+| `YOLOXDetector(path, ...)` | Person detector, `.detect(frame)` returns `[[x1,y1,x2,y2], ...]` |
+| `preprocess_person(frame, bbox, w, h)` | Crop + normalize, returns `(tensor, crop_region)` |
+| `decode_simcc(simcc_x, simcc_y, w, h, ratio)` | Decode SimCC logits, returns `(keypoints, scores)` |
+| `remap_to_frame(kpts, crop_region, w, h)` | Map keypoints back to original frame coords |
+| `draw_pose(frame, kpts, scores, threshold)` | Draw skeleton + keypoints on frame |
+| `draw_bboxes(frame, bboxes)` | Draw detection bounding boxes |
+| `infer_persons(sess, frame, bboxes, ...)` | Full per-person inference loop, returns annotated frame |
+| `run_on_image(sess, path, ...)` | End-to-end image inference with I/O |
+| `run_on_video(sess, path, ...)` | End-to-end video inference with I/O |
+| `run_on_webcam(sess, ...)` | End-to-end webcam inference |
+| `COCO133_SKELETON` | Skeleton connectivity for 133 whole-body keypoints |
+| `COCO17_SKELETON` | Skeleton connectivity for 17 body keypoints |
+| `CROWDPOSE14_SKELETON` | Skeleton connectivity for 14 CrowdPose keypoints |
 
 ---
 
@@ -179,7 +292,7 @@ class MyDetector:
         ...
 ```
 
-Then wire it up in `main()` or pass it programmatically.
+Then use it via the Python API or wire it up in `cli.py`.
 
 ### Pre-computed boxes
 
