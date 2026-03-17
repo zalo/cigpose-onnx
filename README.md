@@ -296,7 +296,7 @@ Then use it via the Python API or wire it up in `cli.py`.
 
 ### Pre-computed boxes
 
-If you already have bounding boxes from a tracker or annotation file, skip the detector entirely. Omit `--detector` and feed pre-cropped single-person images.
+If you already have bounding boxes from a tracker, skip the detector entirely. Omit `--detector` and feed pre-cropped single-person images.
 
 ### License note
 
