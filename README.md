@@ -318,6 +318,68 @@ Model metadata (input dimensions, normalization constants, split ratio) is embed
 
 ---
 
+## Stereo Camera Support
+
+This fork adds two scripts for running CIGPose on a **side-by-side stereo UVC camera**, producing real-time **3-D skeleton coordinates** via triangulation.
+
+### Calibration
+
+```bash
+python stereo_calibrate.py --camera 0 --output calibration.json
+```
+
+- Renders a **ChArUco board** on-screen — point the stereo camera at your monitor
+- Captures a stereo pair automatically every second (`s` to force, `q` to stop early)
+- Saves every valid pair to `calibration_pairs/` so progress is never lost (re-running reloads them)
+- Runs `cv2.stereoCalibrate` + `stereoRectify` after 35 valid pairs and writes `calibration.json`
+
+| Flag | Default | Description |
+|---|---|---|
+| `--camera` | 0 | Camera device index |
+| `--output` | `calibration.json` | Output path |
+| `--save-dir` | `calibration_pairs/` | Folder for intermediate pairs |
+| `--min-pairs` | 35 | Required valid pairs before calibrating |
+| `--interval` | 1.0 s | Time between automatic captures |
+| `--board-size` | `1200x900` | On-screen board size in pixels |
+
+### Stereo 3-D Inference
+
+```bash
+python stereo_infer.py \
+    --model    models/cigpose-m_coco-wholebody_256x192.onnx \
+    --detector models/yolox_nano.onnx \
+    --calib    calibration.json
+```
+
+- Runs YOLOX independently on each camera half, then batches all crops through CIGPose in **one ONNX call**
+- Matches persons across views using epipolar geometry (rectified y-centroid proximity)
+- Triangulates each matched keypoint pair into metric 3-D coordinates
+- Streams pose data over **WebSocket** and serves the Three.js viewer via HTTP
+- Automatically opens `http://localhost:8766/` in your default browser
+
+| Flag | Default | Description |
+|---|---|---|
+| `--calib` | *required* | `calibration.json` path |
+| `--ws-port` | 8765 | WebSocket port |
+| `--http-port` | 8766 | HTTP viewer port |
+| `--no-browser` | off | Serve viewer but don't auto-open browser |
+| `--no-viewer` | off | Disable WebSocket server and viewer entirely |
+
+### 3-D Viewer
+
+`viewer/index.html` is a Three.js scene that connects to the WebSocket and renders an interactive 3-D skeleton. It is served automatically — no separate web server needed.
+
+Drag to orbit · Scroll to zoom · Right-drag to pan.
+
+### Additional dependencies
+
+```bash
+pip install websockets
+pip install opencv-contrib-python   # for ChArUco calibration
+```
+
+---
+
 ## Acknowledgements
 
 - **[CIGPose](https://github.com/53mins/CIGPose)** by 53mins - model architectures, training pipeline, and all checkpoint weights.

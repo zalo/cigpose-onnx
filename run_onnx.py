@@ -273,14 +273,28 @@ def _draw_bboxes(frame, bboxes):
 
 def _infer_persons(session, frame, bboxes, input_w, input_h, split_ratio,
                    threshold):
-    """Run pose estimation on each detected person and draw results."""
+    """Run pose estimation on all detected persons in a single batched call."""
     vis = frame.copy()
+    if not bboxes:
+        return vis
+
+    tensors, crop_regions = [], []
     for bbox in bboxes:
         tensor, crop_region = preprocess_person(frame, bbox, input_w, input_h)
-        simcc_x, simcc_y = session.run(None, {'input': tensor})
-        kpts, scores = decode_simcc(simcc_x, simcc_y, input_w, input_h, split_ratio)
+        tensors.append(tensor)
+        crop_regions.append(crop_region)
+
+    batch = np.concatenate(tensors, axis=0)  # [N, 3, H, W]
+    simcc_x_batch, simcc_y_batch = session.run(None, {'input': batch})
+
+    for i, crop_region in enumerate(crop_regions):
+        kpts, scores = decode_simcc(
+            simcc_x_batch[i:i+1], simcc_y_batch[i:i+1],
+            input_w, input_h, split_ratio,
+        )
         kpts = remap_to_frame(kpts, crop_region, input_w, input_h)
         draw_pose(vis, kpts, scores, threshold)
+
     return vis
 
 

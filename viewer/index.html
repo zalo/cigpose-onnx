@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stereo CIGPose — 3D Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0d0d0d; color: #e0e0e0; font-family: monospace; overflow: hidden; }
+    canvas { display: block; }
+
+    #hud {
+      position: fixed; top: 12px; left: 12px; z-index: 10;
+      background: rgba(0,0,0,.55); padding: 8px 14px; border-radius: 6px;
+      font-size: 13px; line-height: 1.7;
+      border: 1px solid rgba(255,255,255,.08);
+    }
+    #status { font-weight: bold; }
+    #status.connected    { color: #44ff88; }
+    #status.disconnected { color: #ff5555; }
+    #status.connecting   { color: #ffcc00; }
+
+    #help {
+      position: fixed; bottom: 12px; left: 12px; z-index: 10;
+      font-size: 11px; color: #666; line-height: 1.8;
+    }
+  </style>
+</head>
+<body>
+
+<div id="hud">
+  <div>Stereo CIGPose — 3D</div>
+  <div>WS: <span id="status" class="connecting">connecting…</span></div>
+  <div>Persons: <span id="n-persons">0</span></div>
+  <div>FPS: <span id="fps">—</span></div>
+</div>
+
+<div id="help">
+  Drag to orbit · Scroll to zoom · Right-drag to pan
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three":          "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/":  "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ---------------------------------------------------------------------------
+// Scene setup
+// ---------------------------------------------------------------------------
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene  = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0d0d);
+scene.fog        = new THREE.Fog(0x0d0d0d, 8, 25);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 50);
+camera.position.set(0, -1.5, 4);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, -0.8, 0);
+controls.enableDamping = true;
+controls.dampingFactor  = 0.08;
+controls.minDistance    = 0.3;
+controls.maxDistance    = 15;
+
+// Lights
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(2, -3, 4);
+scene.add(dirLight);
+
+// Grid (floor, Y-up world)
+const grid = new THREE.GridHelper(6, 20, 0x333333, 0x222222);
+grid.position.y = 0;
+scene.add(grid);
+
+// Axes helper (small, near origin)
+scene.add(new THREE.AxesHelper(0.3));
+
+// ---------------------------------------------------------------------------
+// Skeleton colours
+// ---------------------------------------------------------------------------
+
+// Warm gradient: head → feet
+function jointColor(index, total) {
+  const t = index / Math.max(total - 1, 1);
+  return new THREE.Color().setHSL(0.6 - t * 0.55, 0.9, 0.6);
+}
+const BONE_COLOR  = new THREE.Color(0x88ccff);
+const BONE_DIM    = new THREE.Color(0x334466);
+
+// ---------------------------------------------------------------------------
+// Per-person 3D objects
+// ---------------------------------------------------------------------------
+
+const MAX_PERSONS = 8;
+const personMeshes = [];   // array of { joints: Mesh[], bones: Line[] }
+
+function makePerson(K) {
+  const joints = [], bones = [];
+
+  const sphereGeo = new THREE.SphereGeometry(0.025, 10, 10);
+  for (let k = 0; k < K; k++) {
+    const mat  = new THREE.MeshStandardMaterial({ color: jointColor(k, K) });
+    const mesh = new THREE.Mesh(sphereGeo, mat);
+    mesh.visible = false;
+    scene.add(mesh);
+    joints.push(mesh);
+  }
+
+  // We'll allocate MAX_BONES lines and reuse them
+  for (let b = 0; b < 40; b++) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position',
+      new THREE.BufferAttribute(new Float32Array(6), 3));
+    const mat  = new THREE.LineBasicMaterial({ color: BONE_COLOR, linewidth: 2 });
+    const line = new THREE.Line(geo, mat);
+    line.visible = false;
+    scene.add(line);
+    bones.push(line);
+  }
+
+  return { joints, bones };
+}
+
+for (let i = 0; i < MAX_PERSONS; i++) {
+  personMeshes.push(makePerson(133));   // allocate for max keypoints
+}
+
+// ---------------------------------------------------------------------------
+// Coordinate transform: OpenCV → Three.js
+//   OpenCV: X right, Y down,  Z forward (into scene)
+//   Three:  X right, Y up,    Z toward viewer
+// We negate Y and Z.
+// ---------------------------------------------------------------------------
+function cvToThree(x, y, z) {
+  return new THREE.Vector3(x, -y, -z);
+}
+
+// ---------------------------------------------------------------------------
+// Update scene from a pose message
+// ---------------------------------------------------------------------------
+
+function updateScene(msg) {
+  const persons  = msg.persons  || [];
+  const skeleton = msg.skeleton || [];
+
+  for (let i = 0; i < MAX_PERSONS; i++) {
+    const pm = personMeshes[i];
+
+    if (i >= persons.length) {
+      pm.joints.forEach(m => { m.visible = false; });
+      pm.bones.forEach(l  => { l.visible  = false; });
+      continue;
+    }
+
+    const { kpts3d, scores } = persons[i];
+    const K = kpts3d.length;
+    const THRESH = 0.4;
+
+    // Joints
+    for (let k = 0; k < pm.joints.length; k++) {
+      if (k >= K || scores[k] < THRESH) {
+        pm.joints[k].visible = false;
+        continue;
+      }
+      const [x, y, z] = kpts3d[k];
+      pm.joints[k].position.copy(cvToThree(x, y, z));
+      pm.joints[k].material.color.copy(jointColor(k, K));
+      pm.joints[k].material.opacity = Math.min(1.0, scores[k] * 1.4);
+      pm.joints[k].material.transparent = scores[k] < 0.7;
+      pm.joints[k].visible = true;
+    }
+
+    // Bones
+    for (let b = 0; b < pm.bones.length; b++) {
+      if (b >= skeleton.length) { pm.bones[b].visible = false; continue; }
+      const [i0, i1] = skeleton[b];
+      if (i0 >= K || i1 >= K || scores[i0] < THRESH || scores[i1] < THRESH) {
+        pm.bones[b].visible = false;
+        continue;
+      }
+      const p0 = cvToThree(...kpts3d[i0]);
+      const p1 = cvToThree(...kpts3d[i1]);
+      const pos = pm.bones[b].geometry.attributes.position;
+      pos.setXYZ(0, p0.x, p0.y, p0.z);
+      pos.setXYZ(1, p1.x, p1.y, p1.z);
+      pos.needsUpdate = true;
+
+      const conf = (scores[i0] + scores[i1]) / 2;
+      pm.bones[b].material.color.lerpColors(BONE_DIM, BONE_COLOR, conf);
+      pm.bones[b].visible = true;
+    }
+  }
+
+  document.getElementById('n-persons').textContent = persons.length;
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket
+// ---------------------------------------------------------------------------
+
+const WS_URL = 'ws://localhost:8765';
+const statusEl = document.getElementById('status');
+let ws, reconnectTimer;
+
+function connect() {
+  clearTimeout(reconnectTimer);
+  statusEl.className = 'connecting';
+  statusEl.textContent = 'connecting…';
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    statusEl.className = 'connected';
+    statusEl.textContent = 'connected';
+  };
+
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'pose') updateScene(msg);
+    } catch (_) {}
+  };
+
+  ws.onclose = () => {
+    statusEl.className = 'disconnected';
+    statusEl.textContent = 'disconnected — retrying…';
+    reconnectTimer = setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+}
+
+connect();
+
+// ---------------------------------------------------------------------------
+// FPS counter + render loop
+// ---------------------------------------------------------------------------
+
+let lastFrameTime = performance.now(), frameCount = 0;
+const fpsEl = document.getElementById('fps');
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+
+  frameCount++;
+  const now = performance.now();
+  if (now - lastFrameTime > 500) {
+    fpsEl.textContent = (frameCount * 1000 / (now - lastFrameTime)).toFixed(1);
+    frameCount = 0;
+    lastFrameTime = now;
+  }
+}
+
+animate();
+
+// ---------------------------------------------------------------------------
+// Resize
+// ---------------------------------------------------------------------------
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
