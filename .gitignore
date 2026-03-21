@@ -16,10 +16,13 @@ models/*.onnx
 *.swp
 *.swo
 
-# Videos / zips
+# Videos / zips / images
 *.mp4
 *.avi
 *.zip
+*.png
+*.jpg
+*.jpeg
 
 # OS
 .DS_Store
