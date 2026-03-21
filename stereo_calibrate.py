@@ -24,8 +24,8 @@ import numpy as np
 # Board config
 # ---------------------------------------------------------------------------
 
-BOARD_COLS = 7       # squares horizontally
-BOARD_ROWS = 5       # squares vertically
+BOARD_COLS = 5       # squares horizontally  (reduced for low-res cameras)
+BOARD_ROWS = 3       # squares vertically
 SQUARE_LEN = 0.04    # metres  (physical size doesn't matter for relative 3-D,
 MARKER_LEN = 0.03    # metres   but it sets the scale of the output T vector)
 DICT_ID    = cv2.aruco.DICT_5X5_100
@@ -72,10 +72,10 @@ def find_common_pts(board, left_corners, left_ids, right_corners, right_ids):
     l_map = {int(i): c for i, c in zip(left_ids.flatten(),  left_corners)}
     r_map = {int(i): c for i, c in zip(right_ids.flatten(), right_corners)}
     common = sorted(set(l_map) & set(r_map))
-    if len(common) < 6:
+    if len(common) < 4:
         return None, None, None
 
-    board_corners = board.chessboardCorners          # (N_total, 3)
+    board_corners = board.getChessboardCorners()     # (N_total, 3)
     obj_pts  = np.array([board_corners[i] for i in common], dtype=np.float32)
     left_pts = np.array([l_map[i]         for i in common], dtype=np.float32)
     right_pts= np.array([r_map[i]         for i in common], dtype=np.float32)
