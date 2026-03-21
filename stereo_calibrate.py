@@ -72,7 +72,7 @@ def find_common_pts(board, left_corners, left_ids, right_corners, right_ids):
     l_map = {int(i): c for i, c in zip(left_ids.flatten(),  left_corners)}
     r_map = {int(i): c for i, c in zip(right_ids.flatten(), right_corners)}
     common = sorted(set(l_map) & set(r_map))
-    if len(common) < 4:
+    if len(common) < 6:   # DLT extrinsic estimation requires ≥ 6 points
         return None, None, None
 
     board_corners = board.getChessboardCorners()     # (N_total, 3)
@@ -102,7 +102,13 @@ def _init_K(image_size):
 
 
 def run_stereo_calibration(pairs, image_size):
-    obj_list, l_list, r_list = zip(*pairs)
+    # DLT needs ≥ 6 points; drop any short pairs (e.g. captured with old threshold)
+    good = [(o, l, r) for o, l, r in pairs if len(o) >= 6]
+    if len(good) < len(pairs):
+        print(f"  Dropped {len(pairs) - len(good)} pair(s) with fewer than 6 common corners")
+    if len(good) < 4:
+        raise RuntimeError(f"Only {len(good)} usable pairs after filtering — need at least 4")
+    obj_list, l_list, r_list = zip(*good)
     criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 200, 1e-6)
     flags_mono = cv2.CALIB_USE_INTRINSIC_GUESS   # skip fragile homography bootstrap
 
@@ -151,6 +157,7 @@ def run_stereo_calibration(pairs, image_size):
 def load_existing_pairs(save_dir, detect, board):
     pairs = []
     max_idx = 0
+    pruned = 0
     for left_path in sorted(save_dir.glob('pair_*_left.png')):
         num = int(left_path.stem.split('_')[1])
         right_path = save_dir / f'pair_{num:04d}_right.png'
@@ -160,12 +167,23 @@ def load_existing_pairs(save_dir, detect, board):
         right_img = cv2.imread(str(right_path))
         lc, li = detect(left_img)
         rc, ri = detect(right_img)
-        if lc is None or rc is None:
-            continue
-        obj_pts, lpts, rpts = find_common_pts(board, lc, li, rc, ri)
-        if obj_pts is not None:
-            pairs.append((obj_pts, lpts, rpts))
-            max_idx = max(max_idx, num + 1)
+
+        keep = False
+        if lc is not None and rc is not None:
+            obj_pts, lpts, rpts = find_common_pts(board, lc, li, rc, ri)
+            if obj_pts is not None:
+                pairs.append((obj_pts, lpts, rpts))
+                max_idx = max(max_idx, num + 1)
+                keep = True
+
+        if not keep:
+            # Undetectable or too few corners — delete so it won't be retried
+            left_path.unlink(missing_ok=True)
+            right_path.unlink(missing_ok=True)
+            pruned += 1
+
+    if pruned:
+        print(f"  Pruned {pruned} unusable pair(s) from '{save_dir}/'")
     return pairs, max_idx
 
 
