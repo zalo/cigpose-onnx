@@ -86,19 +86,38 @@ def find_common_pts(board, left_corners, left_ids, right_corners, right_ids):
 # Calibration
 # ---------------------------------------------------------------------------
 
+def _init_K(image_size):
+    """Return a reasonable initial camera matrix for the given image size.
+
+    Using CALIB_USE_INTRINSIC_GUESS with this seed bypasses initIntrinsicParams2D,
+    which fails via a homography assertion when corner coverage is sparse or
+    the image is low-resolution.  f = max(W, H) is a safe prior for cameras
+    with a field-of-view up to ~50°.
+    """
+    w, h = image_size
+    f = float(max(w, h))
+    return np.array([[f, 0, w / 2.0],
+                     [0, f, h / 2.0],
+                     [0, 0,     1.0]], dtype=np.float64)
+
+
 def run_stereo_calibration(pairs, image_size):
     obj_list, l_list, r_list = zip(*pairs)
     criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 200, 1e-6)
+    flags_mono = cv2.CALIB_USE_INTRINSIC_GUESS   # skip fragile homography bootstrap
 
-    # Step 1: calibrate each camera individually to get a good K/D starting point.
-    # Passing identity matrices directly to stereoCalibrate causes initIntrinsicParams2D
-    # to fail; individual calibration avoids that.
+    # Step 1: calibrate each camera individually.
     print("  Calibrating left camera…")
-    _, K1, D1, _, _ = cv2.calibrateCamera(obj_list, l_list, image_size, None, None,
-                                           criteria=criteria)
+    _, K1, D1, _, _ = cv2.calibrateCamera(
+        obj_list, l_list, image_size,
+        _init_K(image_size), np.zeros(5, dtype=np.float64),
+        flags=flags_mono, criteria=criteria)
+
     print("  Calibrating right camera…")
-    _, K2, D2, _, _ = cv2.calibrateCamera(obj_list, r_list, image_size, None, None,
-                                           criteria=criteria)
+    _, K2, D2, _, _ = cv2.calibrateCamera(
+        obj_list, r_list, image_size,
+        _init_K(image_size), np.zeros(5, dtype=np.float64),
+        flags=flags_mono, criteria=criteria)
 
     # Step 2: stereo calibration — fix individual intrinsics, solve only for R and T.
     print("  Running stereoCalibrate…")
