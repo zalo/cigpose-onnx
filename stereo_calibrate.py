@@ -88,17 +88,25 @@ def find_common_pts(board, left_corners, left_ids, right_corners, right_ids):
 
 def run_stereo_calibration(pairs, image_size):
     obj_list, l_list, r_list = zip(*pairs)
-
-    K1, D1 = np.eye(3, dtype=np.float64), np.zeros(5, dtype=np.float64)
-    K2, D2 = np.eye(3, dtype=np.float64), np.zeros(5, dtype=np.float64)
-
-    flags = (cv2.CALIB_RATIONAL_MODEL)
     criteria = (cv2.TERM_CRITERIA_MAX_ITER | cv2.TERM_CRITERIA_EPS, 200, 1e-6)
 
+    # Step 1: calibrate each camera individually to get a good K/D starting point.
+    # Passing identity matrices directly to stereoCalibrate causes initIntrinsicParams2D
+    # to fail; individual calibration avoids that.
+    print("  Calibrating left camera…")
+    _, K1, D1, _, _ = cv2.calibrateCamera(obj_list, l_list, image_size, None, None,
+                                           criteria=criteria)
+    print("  Calibrating right camera…")
+    _, K2, D2, _, _ = cv2.calibrateCamera(obj_list, r_list, image_size, None, None,
+                                           criteria=criteria)
+
+    # Step 2: stereo calibration — fix individual intrinsics, solve only for R and T.
+    print("  Running stereoCalibrate…")
     rms, K1, D1, K2, D2, R, T, E, F = cv2.stereoCalibrate(
         obj_list, l_list, r_list,
         K1, D1, K2, D2, image_size,
-        flags=flags, criteria=criteria,
+        flags=cv2.CALIB_FIX_INTRINSIC,
+        criteria=criteria,
     )
 
     R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(
@@ -162,89 +170,99 @@ def main():
 
     board, _ = create_board()
     detect    = make_detector(board)
-    board_img = render_board(board, (board_w, board_h))
 
-    # Show the calibration pattern in its own window
-    cv2.namedWindow('ChArUco Board — point camera here', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('ChArUco Board — point camera here', board_w, board_h)
-    cv2.imshow('ChArUco Board — point camera here', board_img)
-
-    cap = cv2.VideoCapture(args.camera)
-    if not cap.isOpened():
-        print(f"Cannot open camera {args.camera}")
-        return
-
-    fw  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    fh  = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    W   = fw // 2          # each camera's width
-    image_size = (W, fh)
-
-    print(f"Stereo frame: {fw}x{fh}  |  each half: {W}x{fh}")
-    print(f"Collecting {args.min_pairs} valid stereo pairs — press 'q' to stop early, 's' to force snapshot")
-
+    # Load any pairs already saved to disk before touching the camera.
     pairs, pair_idx = load_existing_pairs(save_dir, detect, board)
     if pairs:
-        print(f"Re-loaded {len(pairs)} existing pairs from {save_dir}/")
+        print(f"Re-loaded {len(pairs)} existing pairs from '{save_dir}/'")
 
-    last_capture = time.time() - args.interval   # capture immediately on start
+    # Derive image_size from disk pairs (stored images) if we already have enough,
+    # so we can calibrate without ever opening the camera.
+    image_size = None
+    if pairs:
+        sample = cv2.imread(str(next(save_dir.glob('pair_*_left.png'))))
+        if sample is not None:
+            image_size = (sample.shape[1], sample.shape[0])
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    if len(pairs) >= args.min_pairs and image_size is not None:
+        print(f"Already have {len(pairs)} valid pairs — skipping capture, going straight to calibration.")
+    else:
+        # Need more pairs: open the camera and start collecting.
+        board_img = render_board(board, (board_w, board_h))
+        cv2.namedWindow('ChArUco Board — point camera here', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('ChArUco Board — point camera here', board_w, board_h)
+        cv2.imshow('ChArUco Board — point camera here', board_img)
 
-        left  = frame[:, :W]
-        right = frame[:, W:]
-        vis   = frame.copy()
-        now   = time.time()
+        cap = cv2.VideoCapture(args.camera)
+        if not cap.isOpened():
+            print(f"Cannot open camera {args.camera}")
+            return
 
-        force_snap = False
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        if key == ord('s'):
-            force_snap = True
+        fw  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        fh  = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        W   = fw // 2
+        image_size = (W, fh)
 
-        do_capture = force_snap or (now - last_capture >= args.interval)
-        captured   = False
+        print(f"Stereo frame: {fw}x{fh}  |  each half: {W}x{fh}")
+        print(f"Collecting {args.min_pairs} valid stereo pairs — press 'q' to stop early, 's' to force snapshot")
 
-        if do_capture:
-            last_capture = now
-            lc, li = detect(left)
-            rc, ri = detect(right)
+        last_capture = time.time() - args.interval   # fire immediately on first frame
 
-            if lc is not None and li is not None and rc is not None and ri is not None:
-                obj_pts, lpts, rpts = find_common_pts(board, lc, li, rc, ri)
-                if obj_pts is not None:
-                    pairs.append((obj_pts, lpts, rpts))
-                    cv2.imwrite(str(save_dir / f'pair_{pair_idx:04d}_left.png'),  left)
-                    cv2.imwrite(str(save_dir / f'pair_{pair_idx:04d}_right.png'), right)
-                    pair_idx += 1
-                    captured  = True
-                    print(f"\r  Valid pairs: {len(pairs)}/{args.min_pairs}", end='', flush=True)
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-            # Draw detected corners on a copy of each half for feedback
-            if lc is not None:
-                cv2.aruco.drawDetectedCornersCharuco(vis[:, :W],  lc, li)
-            if rc is not None:
-                cv2.aruco.drawDetectedCornersCharuco(vis[:, W:],  rc, ri)
+            left  = frame[:, :W]
+            right = frame[:, W:]
+            vis   = frame.copy()
+            now   = time.time()
 
-        # Progress overlay
-        n, goal = len(pairs), args.min_pairs
-        bar_w   = int(W * min(n / goal, 1.0))
-        cv2.rectangle(vis, (0, fh - 12), (bar_w, fh), (0, 220, 0), -1)
-        color = (0, 255, 80) if captured else (0, 200, 255)
-        cv2.putText(vis, f"Pairs: {n}/{goal}  (q=quit  s=snap)",
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            force_snap = False
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            if key == ord('s'):
+                force_snap = True
 
-        cv2.imshow('Stereo Calibration', vis)
+            do_capture = force_snap or (now - last_capture >= args.interval)
+            captured   = False
 
-        if len(pairs) >= args.min_pairs:
-            print(f"\nReached {len(pairs)} pairs — calibrating…")
-            break
+            if do_capture:
+                last_capture = now
+                lc, li = detect(left)
+                rc, ri = detect(right)
 
-    cap.release()
-    cv2.destroyAllWindows()
+                if lc is not None and li is not None and rc is not None and ri is not None:
+                    obj_pts, lpts, rpts = find_common_pts(board, lc, li, rc, ri)
+                    if obj_pts is not None:
+                        pairs.append((obj_pts, lpts, rpts))
+                        # Always append; never overwrite existing files.
+                        cv2.imwrite(str(save_dir / f'pair_{pair_idx:04d}_left.png'),  left)
+                        cv2.imwrite(str(save_dir / f'pair_{pair_idx:04d}_right.png'), right)
+                        pair_idx += 1
+                        captured  = True
+                        print(f"\r  Valid pairs: {len(pairs)}/{args.min_pairs}", end='', flush=True)
+
+                if lc is not None:
+                    cv2.aruco.drawDetectedCornersCharuco(vis[:, :W], lc, li)
+                if rc is not None:
+                    cv2.aruco.drawDetectedCornersCharuco(vis[:, W:], rc, ri)
+
+            n, goal = len(pairs), args.min_pairs
+            bar_w   = int(W * min(n / goal, 1.0))
+            cv2.rectangle(vis, (0, fh - 12), (bar_w, fh), (0, 220, 0), -1)
+            color = (0, 255, 80) if captured else (0, 200, 255)
+            cv2.putText(vis, f"Pairs: {n}/{goal}  (q=quit  s=snap)",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.imshow('Stereo Calibration', vis)
+
+            if len(pairs) >= args.min_pairs:
+                print(f"\nReached {len(pairs)} pairs — calibrating…")
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
 
     if len(pairs) < 4:
         print(f"Only {len(pairs)} pairs — need at least 4. Exiting.")
