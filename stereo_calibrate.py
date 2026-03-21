@@ -156,7 +156,7 @@ def load_existing_pairs(save_dir, detect, board):
 
 def main():
     ap = argparse.ArgumentParser(description='Stereo ChArUco calibration')
-    ap.add_argument('--camera',    type=int,   default=0)
+    ap.add_argument('--camera',    type=int,   default=1)
     ap.add_argument('--output',    default='calibration.json')
     ap.add_argument('--save-dir',  default='calibration_pairs')
     ap.add_argument('--min-pairs', type=int,   default=MIN_PAIRS)
