@@ -52,7 +52,13 @@ except ImportError:
 # Calibration
 # ---------------------------------------------------------------------------
 
-def load_calibration(path):
+def load_calibration(path, actual_size=None):
+    """Load stereo calibration, optionally rescaling to *actual_size* (W, H).
+
+    If the camera is running at a higher resolution than the calibration was
+    captured at, the intrinsic matrices and projection matrices are scaled so
+    that undistortion / rectification / triangulation still work correctly.
+    """
     with open(path) as f:
         c = json.load(f)
 
@@ -64,7 +70,25 @@ def load_calibration(path):
     R2 = np.array(c['R2'], dtype=np.float64)
     P1 = np.array(c['P1'], dtype=np.float64)
     P2 = np.array(c['P2'], dtype=np.float64)
-    image_size = tuple(c['image_size'])   # (W, H) of each half
+    calib_size = tuple(c['image_size'])   # (W, H) of each half at calibration time
+
+    image_size = calib_size
+    if actual_size is not None and actual_size != calib_size:
+        sx = actual_size[0] / calib_size[0]
+        sy = actual_size[1] / calib_size[1]
+        print(f"  Rescaling calibration {calib_size} -> {actual_size}  (sx={sx:.2f}, sy={sy:.2f})")
+        S = np.array([[sx, 0, 0],
+                      [0, sy, 0],
+                      [0,  0, 1]], dtype=np.float64)
+        K1 = S @ K1
+        K2 = S @ K2
+        # P matrices are 3x4; scale the 3x3 left block and the last column
+        S34 = np.eye(3, 4, dtype=np.float64)
+        S34[:3, :3] = S
+        S34[:, 3] = [sx, sy, 1]      # baseline column scales with focal
+        P1 = S @ P1
+        P2 = S @ P2
+        image_size = actual_size
 
     map1x, map1y = cv2.initUndistortRectifyMap(K1, D1, R1, P1, image_size, cv2.CV_32FC1)
     map2x, map2y = cv2.initUndistortRectifyMap(K2, D2, R2, P2, image_size, cv2.CV_32FC1)
@@ -180,7 +204,7 @@ class PoseStreamer:
 
     async def _serve(self):
         async with websockets.serve(self._handler, self.host, self.port):
-            print(f"WebSocket: ws://{self.host}:{self.port}  →  open viewer/index.html")
+            print(f"WebSocket: ws://{self.host}:{self.port}  ->  open viewer/index.html")
             await asyncio.Future()
 
     async def _handler(self, ws):
@@ -262,15 +286,13 @@ def main():
     ap.add_argument('--http-port',  type=int,   default=8766, help='Port for the HTML viewer (default: 8766)')
     ap.add_argument('--no-browser', action='store_true', help='Serve viewer but do not auto-open browser')
     ap.add_argument('--no-viewer',  action='store_true', help='Disable WebSocket server and viewer entirely')
+    ap.add_argument('--resolution', type=str, default=None,
+                    help='Camera resolution per eye as WxH, e.g. 1280x720. '
+                         'Calibration is rescaled automatically.')
     args = ap.parse_args()
 
     providers = (['CUDAExecutionProvider', 'CPUExecutionProvider']
                  if args.device == 'cuda' else ['CPUExecutionProvider'])
-
-    # --- Load calibration ---
-    print(f"Loading calibration: {args.calib}")
-    calib = load_calibration(args.calib)
-    calib_img_w, calib_img_h = calib['P1'][0, 2] * 2, calib['P1'][1, 2] * 2  # approx
 
     # --- Load models ---
     print(f"Loading pose model: {args.model}")
@@ -313,10 +335,20 @@ def main():
         print(f"Cannot open camera {args.camera}")
         return
 
+    # Set requested resolution (side-by-side = 2*W x H)
+    if args.resolution:
+        rw, rh = (int(x) for x in args.resolution.split('x'))
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, rw * 2)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, rh)
+
     fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     W  = fw // 2
     print(f"Stereo frame: {fw}x{fh}  |  each half: {W}x{fh}")
+
+    # --- Load calibration (rescaled to actual camera resolution) ---
+    print(f"Loading calibration: {args.calib}")
+    calib = load_calibration(args.calib, actual_size=(W, fh))
     print("Press 'q' to quit")
 
     skeleton = _SKELETON_MAP.get(17, _SKELETON_MAP.get(14, []))  # prefer COCO-17

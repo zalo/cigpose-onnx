@@ -113,20 +113,20 @@ def run_stereo_calibration(pairs, image_size):
     flags_mono = cv2.CALIB_USE_INTRINSIC_GUESS   # skip fragile homography bootstrap
 
     # Step 1: calibrate each camera individually.
-    print("  Calibrating left camera…")
+    print("  Calibrating left camera...")
     _, K1, D1, _, _ = cv2.calibrateCamera(
         obj_list, l_list, image_size,
         _init_K(image_size), np.zeros(5, dtype=np.float64),
         flags=flags_mono, criteria=criteria)
 
-    print("  Calibrating right camera…")
+    print("  Calibrating right camera...")
     _, K2, D2, _, _ = cv2.calibrateCamera(
         obj_list, r_list, image_size,
         _init_K(image_size), np.zeros(5, dtype=np.float64),
         flags=flags_mono, criteria=criteria)
 
     # Step 2: stereo calibration — fix individual intrinsics, solve only for R and T.
-    print("  Running stereoCalibrate…")
+    print("  Running stereoCalibrate...")
     rms, K1, D1, K2, D2, R, T, E, F = cv2.stereoCalibrate(
         obj_list, l_list, r_list,
         K1, D1, K2, D2, image_size,
@@ -199,6 +199,8 @@ def main():
     ap.add_argument('--min-pairs', type=int,   default=MIN_PAIRS)
     ap.add_argument('--interval',  type=float, default=CAPTURE_INTERVAL)
     ap.add_argument('--board-size',default='1200x900')
+    ap.add_argument('--resolution', type=str, default=None,
+                    help='Camera resolution per eye as WxH, e.g. 1280x720')
     args = ap.parse_args()
 
     board_w, board_h = map(int, args.board_size.split('x'))
@@ -222,18 +224,24 @@ def main():
             image_size = (sample.shape[1], sample.shape[0])
 
     if len(pairs) >= args.min_pairs and image_size is not None:
-        print(f"Already have {len(pairs)} valid pairs — skipping capture, going straight to calibration.")
+        print(f"Already have {len(pairs)} valid pairs -- skipping capture, going straight to calibration.")
     else:
         # Need more pairs: open the camera and start collecting.
         board_img = render_board(board, (board_w, board_h))
-        cv2.namedWindow('ChArUco Board — point camera here', cv2.WINDOW_NORMAL)
-        cv2.resizeWindow('ChArUco Board — point camera here', board_w, board_h)
-        cv2.imshow('ChArUco Board — point camera here', board_img)
+        cv2.namedWindow('ChArUco Board - point camera here', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('ChArUco Board - point camera here', board_w, board_h)
+        cv2.imshow('ChArUco Board - point camera here', board_img)
 
         cap = cv2.VideoCapture(args.camera)
         if not cap.isOpened():
             print(f"Cannot open camera {args.camera}")
             return
+
+        # Set requested resolution (side-by-side = 2*W x H)
+        if args.resolution:
+            rw, rh = (int(x) for x in args.resolution.split('x'))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, rw * 2)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, rh)
 
         fw  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         fh  = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -241,7 +249,7 @@ def main():
         image_size = (W, fh)
 
         print(f"Stereo frame: {fw}x{fh}  |  each half: {W}x{fh}")
-        print(f"Collecting {args.min_pairs} valid stereo pairs — press 'q' to stop early, 's' to force snapshot")
+        print(f"Collecting {args.min_pairs} valid stereo pairs -- press 'q' to stop early, 's' to force snapshot")
 
         last_capture = time.time() - args.interval   # fire immediately on first frame
 
@@ -295,17 +303,17 @@ def main():
             cv2.imshow('Stereo Calibration', vis)
 
             if len(pairs) >= args.min_pairs:
-                print(f"\nReached {len(pairs)} pairs — calibrating…")
+                print(f"\nReached {len(pairs)} pairs -- calibrating...")
                 break
 
         cap.release()
         cv2.destroyAllWindows()
 
     if len(pairs) < 4:
-        print(f"Only {len(pairs)} pairs — need at least 4. Exiting.")
+        print(f"Only {len(pairs)} pairs -- need at least 4. Exiting.")
         return
 
-    print(f"\nRunning stereoCalibrate with {len(pairs)} pairs…")
+    print(f"\nRunning stereoCalibrate with {len(pairs)} pairs...")
     calib = run_stereo_calibration(pairs, image_size)
 
     with open(args.output, 'w') as f:
@@ -314,7 +322,7 @@ def main():
     print(f"Saved: {args.output}")
     print(f"RMS reprojection error: {calib['rms']:.4f} px")
     if calib['rms'] > 1.5:
-        print("  ⚠  RMS > 1.5 px — try collecting more varied poses or recapturing")
+        print("  WARNING: RMS > 1.5 px -- try collecting more varied poses or recapturing")
 
 
 if __name__ == '__main__':
